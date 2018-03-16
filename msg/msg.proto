@@ -6,6 +6,32 @@ message Hello {
   string ident = 1;
 }
 
+enum AuthType {
+  PUBKEY = 0;
+}
+
+message AuthAttempt {
+  AuthType type = 1;
+  bytes data = 2;
+  string user = 3;
+}
+
+enum AuthChallengeType {
+  SIGN = 0;
+  REJECT = 1;
+  ACCEPT = 2;
+}
+
+message AuthChallenge {
+  AuthChallengeType type = 1;
+  bytes nonce = 2;
+}
+
+message AuthResponse {
+  bytes answer = 1;
+  string format = 2;
+}
+
 message RequestExec {
   int64 id = 1;
   string command = 2;

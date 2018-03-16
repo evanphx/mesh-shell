@@ -13,6 +13,7 @@ import (
 var (
 	fId      = flag.String("id", "", "identify to advertise (default to hostname)")
 	fNetwork = flag.String("network", "", "network to advertise on")
+	fVerbose = flag.Bool("v", false, "be verbose with the output")
 )
 
 func main() {
@@ -38,12 +39,16 @@ func main() {
 		}
 	}
 
-	serv, err := server.NewServer(id, network)
+	opts := server.ServerOptions{
+		Id:      id,
+		Network: network,
+		Debug:   *fVerbose,
+	}
+
+	serv, err := server.NewServer(opts)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	log.Printf("Advertised as %s@%s\n", id, network)
 
 	ctx := context.Background()
 

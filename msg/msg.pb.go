@@ -10,6 +10,9 @@
 
 	It has these top-level messages:
 		Hello
+		AuthAttempt
+		AuthChallenge
+		AuthResponse
 		RequestExec
 		RequestShell
 		ControlMessage
@@ -42,6 +45,42 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion2 // please upgrade the proto package
 
+type AuthType int32
+
+const (
+	PUBKEY AuthType = 0
+)
+
+var AuthType_name = map[int32]string{
+	0: "PUBKEY",
+}
+var AuthType_value = map[string]int32{
+	"PUBKEY": 0,
+}
+
+func (AuthType) EnumDescriptor() ([]byte, []int) { return fileDescriptorMsg, []int{0} }
+
+type AuthChallengeType int32
+
+const (
+	SIGN   AuthChallengeType = 0
+	REJECT AuthChallengeType = 1
+	ACCEPT AuthChallengeType = 2
+)
+
+var AuthChallengeType_name = map[int32]string{
+	0: "SIGN",
+	1: "REJECT",
+	2: "ACCEPT",
+}
+var AuthChallengeType_value = map[string]int32{
+	"SIGN":   0,
+	"REJECT": 1,
+	"ACCEPT": 2,
+}
+
+func (AuthChallengeType) EnumDescriptor() ([]byte, []int) { return fileDescriptorMsg, []int{1} }
+
 type ControlCode int32
 
 const (
@@ -64,7 +103,7 @@ var ControlCode_value = map[string]int32{
 	"EXIT":  3,
 }
 
-func (ControlCode) EnumDescriptor() ([]byte, []int) { return fileDescriptorMsg, []int{0} }
+func (ControlCode) EnumDescriptor() ([]byte, []int) { return fileDescriptorMsg, []int{2} }
 
 type Hello struct {
 	Ident string `protobuf:"bytes,1,opt,name=ident,proto3" json:"ident,omitempty"`
@@ -74,6 +113,34 @@ func (m *Hello) Reset()                    { *m = Hello{} }
 func (*Hello) ProtoMessage()               {}
 func (*Hello) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{0} }
 
+type AuthAttempt struct {
+	Type AuthType `protobuf:"varint,1,opt,name=type,proto3,enum=msg.AuthType" json:"type,omitempty"`
+	Data []byte   `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	User string   `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
+}
+
+func (m *AuthAttempt) Reset()                    { *m = AuthAttempt{} }
+func (*AuthAttempt) ProtoMessage()               {}
+func (*AuthAttempt) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{1} }
+
+type AuthChallenge struct {
+	Type  AuthChallengeType `protobuf:"varint,1,opt,name=type,proto3,enum=msg.AuthChallengeType" json:"type,omitempty"`
+	Nonce []byte            `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
+}
+
+func (m *AuthChallenge) Reset()                    { *m = AuthChallenge{} }
+func (*AuthChallenge) ProtoMessage()               {}
+func (*AuthChallenge) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{2} }
+
+type AuthResponse struct {
+	Answer []byte `protobuf:"bytes,1,opt,name=answer,proto3" json:"answer,omitempty"`
+	Format string `protobuf:"bytes,2,opt,name=format,proto3" json:"format,omitempty"`
+}
+
+func (m *AuthResponse) Reset()                    { *m = AuthResponse{} }
+func (*AuthResponse) ProtoMessage()               {}
+func (*AuthResponse) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{3} }
+
 type RequestExec struct {
 	Id      int64    `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	Command string   `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
@@ -82,7 +149,7 @@ type RequestExec struct {
 
 func (m *RequestExec) Reset()                    { *m = RequestExec{} }
 func (*RequestExec) ProtoMessage()               {}
-func (*RequestExec) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{1} }
+func (*RequestExec) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{4} }
 
 type RequestShell struct {
 	Id int64 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -90,7 +157,7 @@ type RequestShell struct {
 
 func (m *RequestShell) Reset()                    { *m = RequestShell{} }
 func (*RequestShell) ProtoMessage()               {}
-func (*RequestShell) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{2} }
+func (*RequestShell) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{5} }
 
 type ControlMessage struct {
 	Id       int64       `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -102,14 +169,33 @@ type ControlMessage struct {
 
 func (m *ControlMessage) Reset()                    { *m = ControlMessage{} }
 func (*ControlMessage) ProtoMessage()               {}
-func (*ControlMessage) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{3} }
+func (*ControlMessage) Descriptor() ([]byte, []int) { return fileDescriptorMsg, []int{6} }
 
 func init() {
 	proto.RegisterType((*Hello)(nil), "msg.Hello")
+	proto.RegisterType((*AuthAttempt)(nil), "msg.AuthAttempt")
+	proto.RegisterType((*AuthChallenge)(nil), "msg.AuthChallenge")
+	proto.RegisterType((*AuthResponse)(nil), "msg.AuthResponse")
 	proto.RegisterType((*RequestExec)(nil), "msg.RequestExec")
 	proto.RegisterType((*RequestShell)(nil), "msg.RequestShell")
 	proto.RegisterType((*ControlMessage)(nil), "msg.ControlMessage")
+	proto.RegisterEnum("msg.AuthType", AuthType_name, AuthType_value)
+	proto.RegisterEnum("msg.AuthChallengeType", AuthChallengeType_name, AuthChallengeType_value)
 	proto.RegisterEnum("msg.ControlCode", ControlCode_name, ControlCode_value)
+}
+func (x AuthType) String() string {
+	s, ok := AuthType_name[int32(x)]
+	if ok {
+		return s
+	}
+	return strconv.Itoa(int(x))
+}
+func (x AuthChallengeType) String() string {
+	s, ok := AuthChallengeType_name[int32(x)]
+	if ok {
+		return s
+	}
+	return strconv.Itoa(int(x))
 }
 func (x ControlCode) String() string {
 	s, ok := ControlCode_name[int32(x)]
@@ -144,6 +230,108 @@ func (this *Hello) Equal(that interface{}) bool {
 		return false
 	}
 	if this.Ident != that1.Ident {
+		return false
+	}
+	return true
+}
+func (this *AuthAttempt) Equal(that interface{}) bool {
+	if that == nil {
+		if this == nil {
+			return true
+		}
+		return false
+	}
+
+	that1, ok := that.(*AuthAttempt)
+	if !ok {
+		that2, ok := that.(AuthAttempt)
+		if ok {
+			that1 = &that2
+		} else {
+			return false
+		}
+	}
+	if that1 == nil {
+		if this == nil {
+			return true
+		}
+		return false
+	} else if this == nil {
+		return false
+	}
+	if this.Type != that1.Type {
+		return false
+	}
+	if !bytes.Equal(this.Data, that1.Data) {
+		return false
+	}
+	if this.User != that1.User {
+		return false
+	}
+	return true
+}
+func (this *AuthChallenge) Equal(that interface{}) bool {
+	if that == nil {
+		if this == nil {
+			return true
+		}
+		return false
+	}
+
+	that1, ok := that.(*AuthChallenge)
+	if !ok {
+		that2, ok := that.(AuthChallenge)
+		if ok {
+			that1 = &that2
+		} else {
+			return false
+		}
+	}
+	if that1 == nil {
+		if this == nil {
+			return true
+		}
+		return false
+	} else if this == nil {
+		return false
+	}
+	if this.Type != that1.Type {
+		return false
+	}
+	if !bytes.Equal(this.Nonce, that1.Nonce) {
+		return false
+	}
+	return true
+}
+func (this *AuthResponse) Equal(that interface{}) bool {
+	if that == nil {
+		if this == nil {
+			return true
+		}
+		return false
+	}
+
+	that1, ok := that.(*AuthResponse)
+	if !ok {
+		that2, ok := that.(AuthResponse)
+		if ok {
+			that1 = &that2
+		} else {
+			return false
+		}
+	}
+	if that1 == nil {
+		if this == nil {
+			return true
+		}
+		return false
+	} else if this == nil {
+		return false
+	}
+	if !bytes.Equal(this.Answer, that1.Answer) {
+		return false
+	}
+	if this.Format != that1.Format {
 		return false
 	}
 	return true
@@ -271,6 +459,40 @@ func (this *Hello) GoString() string {
 	s = append(s, "}")
 	return strings.Join(s, "")
 }
+func (this *AuthAttempt) GoString() string {
+	if this == nil {
+		return "nil"
+	}
+	s := make([]string, 0, 7)
+	s = append(s, "&msg.AuthAttempt{")
+	s = append(s, "Type: "+fmt.Sprintf("%#v", this.Type)+",\n")
+	s = append(s, "Data: "+fmt.Sprintf("%#v", this.Data)+",\n")
+	s = append(s, "User: "+fmt.Sprintf("%#v", this.User)+",\n")
+	s = append(s, "}")
+	return strings.Join(s, "")
+}
+func (this *AuthChallenge) GoString() string {
+	if this == nil {
+		return "nil"
+	}
+	s := make([]string, 0, 6)
+	s = append(s, "&msg.AuthChallenge{")
+	s = append(s, "Type: "+fmt.Sprintf("%#v", this.Type)+",\n")
+	s = append(s, "Nonce: "+fmt.Sprintf("%#v", this.Nonce)+",\n")
+	s = append(s, "}")
+	return strings.Join(s, "")
+}
+func (this *AuthResponse) GoString() string {
+	if this == nil {
+		return "nil"
+	}
+	s := make([]string, 0, 6)
+	s = append(s, "&msg.AuthResponse{")
+	s = append(s, "Answer: "+fmt.Sprintf("%#v", this.Answer)+",\n")
+	s = append(s, "Format: "+fmt.Sprintf("%#v", this.Format)+",\n")
+	s = append(s, "}")
+	return strings.Join(s, "")
+}
 func (this *RequestExec) GoString() string {
 	if this == nil {
 		return "nil"
@@ -353,6 +575,100 @@ func (m *Hello) MarshalTo(dAtA []byte) (int, error) {
 		i++
 		i = encodeVarintMsg(dAtA, i, uint64(len(m.Ident)))
 		i += copy(dAtA[i:], m.Ident)
+	}
+	return i, nil
+}
+
+func (m *AuthAttempt) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalTo(dAtA)
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AuthAttempt) MarshalTo(dAtA []byte) (int, error) {
+	var i int
+	_ = i
+	var l int
+	_ = l
+	if m.Type != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(m.Type))
+	}
+	if len(m.Data) > 0 {
+		dAtA[i] = 0x12
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(len(m.Data)))
+		i += copy(dAtA[i:], m.Data)
+	}
+	if len(m.User) > 0 {
+		dAtA[i] = 0x1a
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(len(m.User)))
+		i += copy(dAtA[i:], m.User)
+	}
+	return i, nil
+}
+
+func (m *AuthChallenge) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalTo(dAtA)
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AuthChallenge) MarshalTo(dAtA []byte) (int, error) {
+	var i int
+	_ = i
+	var l int
+	_ = l
+	if m.Type != 0 {
+		dAtA[i] = 0x8
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(m.Type))
+	}
+	if len(m.Nonce) > 0 {
+		dAtA[i] = 0x12
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(len(m.Nonce)))
+		i += copy(dAtA[i:], m.Nonce)
+	}
+	return i, nil
+}
+
+func (m *AuthResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalTo(dAtA)
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AuthResponse) MarshalTo(dAtA []byte) (int, error) {
+	var i int
+	_ = i
+	var l int
+	_ = l
+	if len(m.Answer) > 0 {
+		dAtA[i] = 0xa
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(len(m.Answer)))
+		i += copy(dAtA[i:], m.Answer)
+	}
+	if len(m.Format) > 0 {
+		dAtA[i] = 0x12
+		i++
+		i = encodeVarintMsg(dAtA, i, uint64(len(m.Format)))
+		i += copy(dAtA[i:], m.Format)
 	}
 	return i, nil
 }
@@ -505,6 +821,50 @@ func (m *Hello) Size() (n int) {
 	return n
 }
 
+func (m *AuthAttempt) Size() (n int) {
+	var l int
+	_ = l
+	if m.Type != 0 {
+		n += 1 + sovMsg(uint64(m.Type))
+	}
+	l = len(m.Data)
+	if l > 0 {
+		n += 1 + l + sovMsg(uint64(l))
+	}
+	l = len(m.User)
+	if l > 0 {
+		n += 1 + l + sovMsg(uint64(l))
+	}
+	return n
+}
+
+func (m *AuthChallenge) Size() (n int) {
+	var l int
+	_ = l
+	if m.Type != 0 {
+		n += 1 + sovMsg(uint64(m.Type))
+	}
+	l = len(m.Nonce)
+	if l > 0 {
+		n += 1 + l + sovMsg(uint64(l))
+	}
+	return n
+}
+
+func (m *AuthResponse) Size() (n int) {
+	var l int
+	_ = l
+	l = len(m.Answer)
+	if l > 0 {
+		n += 1 + l + sovMsg(uint64(l))
+	}
+	l = len(m.Format)
+	if l > 0 {
+		n += 1 + l + sovMsg(uint64(l))
+	}
+	return n
+}
+
 func (m *RequestExec) Size() (n int) {
 	var l int
 	_ = l
@@ -574,6 +934,40 @@ func (this *Hello) String() string {
 	}
 	s := strings.Join([]string{`&Hello{`,
 		`Ident:` + fmt.Sprintf("%v", this.Ident) + `,`,
+		`}`,
+	}, "")
+	return s
+}
+func (this *AuthAttempt) String() string {
+	if this == nil {
+		return "nil"
+	}
+	s := strings.Join([]string{`&AuthAttempt{`,
+		`Type:` + fmt.Sprintf("%v", this.Type) + `,`,
+		`Data:` + fmt.Sprintf("%v", this.Data) + `,`,
+		`User:` + fmt.Sprintf("%v", this.User) + `,`,
+		`}`,
+	}, "")
+	return s
+}
+func (this *AuthChallenge) String() string {
+	if this == nil {
+		return "nil"
+	}
+	s := strings.Join([]string{`&AuthChallenge{`,
+		`Type:` + fmt.Sprintf("%v", this.Type) + `,`,
+		`Nonce:` + fmt.Sprintf("%v", this.Nonce) + `,`,
+		`}`,
+	}, "")
+	return s
+}
+func (this *AuthResponse) String() string {
+	if this == nil {
+		return "nil"
+	}
+	s := strings.Join([]string{`&AuthResponse{`,
+		`Answer:` + fmt.Sprintf("%v", this.Answer) + `,`,
+		`Format:` + fmt.Sprintf("%v", this.Format) + `,`,
 		`}`,
 	}, "")
 	return s
@@ -679,6 +1073,345 @@ func (m *Hello) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.Ident = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipMsg(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthMsg
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AuthAttempt) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowMsg
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AuthAttempt: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AuthAttempt: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Type", wireType)
+			}
+			m.Type = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Type |= (AuthType(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Data", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthMsg
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Data = append(m.Data[:0], dAtA[iNdEx:postIndex]...)
+			if m.Data == nil {
+				m.Data = []byte{}
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field User", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthMsg
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.User = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipMsg(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthMsg
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AuthChallenge) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowMsg
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AuthChallenge: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AuthChallenge: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Type", wireType)
+			}
+			m.Type = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Type |= (AuthChallengeType(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Nonce", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthMsg
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Nonce = append(m.Nonce[:0], dAtA[iNdEx:postIndex]...)
+			if m.Nonce == nil {
+				m.Nonce = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipMsg(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthMsg
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AuthResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowMsg
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AuthResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AuthResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Answer", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthMsg
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Answer = append(m.Answer[:0], dAtA[iNdEx:postIndex]...)
+			if m.Answer == nil {
+				m.Answer = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Format", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowMsg
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= (uint64(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthMsg
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Format = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -1162,28 +1895,38 @@ var (
 func init() { proto.RegisterFile("github.com/evanphx/mesh-shell/msg/msg.proto", fileDescriptorMsg) }
 
 var fileDescriptorMsg = []byte{
-	// 357 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x64, 0x91, 0xcd, 0x4a, 0xeb, 0x40,
-	0x14, 0x80, 0x33, 0xf9, 0xb9, 0xb7, 0x39, 0x2d, 0x25, 0x0c, 0x77, 0x11, 0xb8, 0xdc, 0x21, 0x84,
-	0xbb, 0x08, 0xfe, 0xb4, 0xa0, 0xe0, 0xbe, 0xd6, 0x82, 0xe2, 0x4f, 0x25, 0xed, 0xc2, 0x9d, 0xa4,
-	0xc9, 0x90, 0x04, 0x92, 0x4c, 0xed, 0xa4, 0xd2, 0xa5, 0x5b, 0x77, 0x3e, 0x86, 0x8f, 0xe2, 0xb2,
-	0x4b, 0x97, 0x76, 0xdc, 0xb8, 0xec, 0x23, 0xc8, 0x8c, 0x15, 0x44, 0x17, 0x03, 0xdf, 0x39, 0x73,
-	0xce, 0x77, 0xce, 0x30, 0xb0, 0x9d, 0xe6, 0x75, 0x36, 0x9f, 0x74, 0x62, 0x56, 0x76, 0xe9, 0x6d,
-	0x54, 0x4d, 0xb3, 0x45, 0xb7, 0xa4, 0x3c, 0xdb, 0xe5, 0x19, 0x2d, 0x8a, 0x6e, 0xc9, 0x53, 0x79,
-	0x3a, 0xd3, 0x19, 0xab, 0x19, 0x36, 0x4a, 0x9e, 0xfa, 0xff, 0xc0, 0x3a, 0xa6, 0x45, 0xc1, 0xf0,
-	0x1f, 0xb0, 0xf2, 0x84, 0x56, 0xb5, 0x8b, 0x3c, 0x14, 0xd8, 0xe1, 0x47, 0xe0, 0x9f, 0x42, 0x33,
-	0xa4, 0x37, 0x73, 0xca, 0xeb, 0xc1, 0x82, 0xc6, 0xb8, 0x0d, 0x7a, 0x9e, 0xa8, 0x0a, 0x23, 0xd4,
-	0xf3, 0x04, 0xbb, 0xf0, 0x3b, 0x66, 0x65, 0x19, 0x55, 0x89, 0xab, 0xab, 0xb6, 0xcf, 0x10, 0x63,
-	0x30, 0xa3, 0x59, 0xca, 0x5d, 0xc3, 0x33, 0x02, 0x3b, 0x54, 0xec, 0x13, 0x68, 0x6d, 0x64, 0x23,
-	0xb9, 0xce, 0x77, 0x9b, 0x7f, 0x8f, 0xa0, 0xdd, 0x67, 0x55, 0x3d, 0x63, 0xc5, 0x39, 0xe5, 0x3c,
-	0x4a, 0xe9, 0x8f, 0x81, 0xff, 0xc1, 0x8c, 0x59, 0x42, 0xd5, 0xb4, 0xf6, 0x9e, 0xd3, 0x91, 0xaf,
-	0xd9, 0xb4, 0xf4, 0x59, 0x42, 0x43, 0x75, 0x8b, 0x1d, 0x30, 0xf8, 0x7c, 0xe2, 0x1a, 0x1e, 0x0a,
-	0xac, 0x50, 0xa2, 0x5c, 0x27, 0x89, 0xea, 0xc8, 0x35, 0x3d, 0x14, 0xb4, 0x42, 0xc5, 0xf8, 0x2f,
-	0xd8, 0x74, 0x91, 0xd7, 0xd7, 0x4a, 0x68, 0xa9, 0xda, 0x86, 0x4c, 0x48, 0xd1, 0xd6, 0x01, 0x34,
-	0xbf, 0x78, 0x71, 0x03, 0xcc, 0x8b, 0xe1, 0xf0, 0xd2, 0xd1, 0x24, 0x1d, 0xf5, 0xc6, 0x3d, 0x07,
-	0x61, 0x1b, 0xac, 0xfe, 0xd9, 0x70, 0x34, 0x70, 0x74, 0x99, 0x1c, 0x5c, 0x9d, 0x8c, 0x1d, 0xe3,
-	0x70, 0x67, 0xb9, 0x22, 0xda, 0xf3, 0x8a, 0x68, 0xeb, 0x15, 0x41, 0x77, 0x82, 0xa0, 0x47, 0x41,
-	0xd0, 0x93, 0x20, 0x68, 0x29, 0x08, 0x7a, 0x11, 0x04, 0xbd, 0x09, 0xa2, 0xad, 0x05, 0x41, 0x0f,
-	0xaf, 0x44, 0x9b, 0xfc, 0x52, 0x3f, 0xb1, 0xff, 0x1e, 0x00, 0x00, 0xff, 0xff, 0x3e, 0xb2, 0x02,
-	0x58, 0xb8, 0x01, 0x00, 0x00,
+	// 515 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x64, 0x52, 0x41, 0x6f, 0xd3, 0x4c,
+	0x10, 0xf5, 0xc6, 0x71, 0xbf, 0x64, 0x92, 0x46, 0xfe, 0x56, 0x55, 0x14, 0x09, 0xb1, 0x0a, 0x16,
+	0x87, 0x2a, 0x40, 0x22, 0x15, 0xc1, 0x11, 0x29, 0x35, 0x16, 0x94, 0x42, 0x13, 0x36, 0x41, 0x2a,
+	0x27, 0xe4, 0xc4, 0x8b, 0x1d, 0xc9, 0xf6, 0x1a, 0xef, 0x06, 0xd2, 0x1b, 0x57, 0x6e, 0xfc, 0x0c,
+	0x7e, 0x0a, 0xc7, 0x1e, 0x39, 0x12, 0x73, 0xe1, 0xd8, 0x9f, 0x80, 0x76, 0xe3, 0x46, 0x81, 0x1e,
+	0x2c, 0xbd, 0x37, 0x33, 0xef, 0x8d, 0x67, 0x66, 0xe1, 0x5e, 0xb8, 0x90, 0xd1, 0x72, 0xd6, 0x9f,
+	0xf3, 0x64, 0xc0, 0x3e, 0xfa, 0x69, 0x16, 0xad, 0x06, 0x09, 0x13, 0xd1, 0x03, 0x11, 0xb1, 0x38,
+	0x1e, 0x24, 0x22, 0x54, 0x5f, 0x3f, 0xcb, 0xb9, 0xe4, 0xd8, 0x4c, 0x44, 0xe8, 0xdc, 0x06, 0xeb,
+	0x39, 0x8b, 0x63, 0x8e, 0x0f, 0xc0, 0x5a, 0x04, 0x2c, 0x95, 0x1d, 0xd4, 0x45, 0x87, 0x75, 0xba,
+	0x21, 0xce, 0x39, 0x34, 0x86, 0x4b, 0x19, 0x0d, 0xa5, 0x64, 0x49, 0x26, 0xf1, 0x1d, 0xa8, 0xca,
+	0x8b, 0x8c, 0xe9, 0x9a, 0xd6, 0xd1, 0x7e, 0x5f, 0x99, 0xa9, 0xfc, 0xf4, 0x22, 0x63, 0x54, 0xa7,
+	0x30, 0x86, 0x6a, 0xe0, 0x4b, 0xbf, 0x53, 0xe9, 0xa2, 0xc3, 0x26, 0xd5, 0x58, 0xc5, 0x96, 0x82,
+	0xe5, 0x1d, 0x53, 0x5b, 0x6b, 0xec, 0xbc, 0x86, 0x7d, 0xa5, 0x74, 0x23, 0x3f, 0x8e, 0x59, 0x1a,
+	0x32, 0xdc, 0xfb, 0xcb, 0xbb, 0xbd, 0xf5, 0xde, 0x56, 0xec, 0x34, 0x39, 0x00, 0x2b, 0xe5, 0xe9,
+	0x9c, 0x95, 0x5d, 0x36, 0xc4, 0x79, 0x02, 0x4d, 0x25, 0xa0, 0x4c, 0x64, 0x3c, 0x15, 0x0c, 0xb7,
+	0x61, 0xcf, 0x4f, 0xc5, 0x27, 0x96, 0x6b, 0xcf, 0x26, 0x2d, 0x99, 0x8a, 0xbf, 0xe7, 0x79, 0xe2,
+	0x4b, 0x2d, 0xaf, 0xd3, 0x92, 0x39, 0xa7, 0xd0, 0xa0, 0xec, 0xc3, 0x92, 0x09, 0xe9, 0xad, 0xd8,
+	0x1c, 0xb7, 0xa0, 0xb2, 0x08, 0xb4, 0xd4, 0xa4, 0x95, 0x45, 0x80, 0x3b, 0xf0, 0xdf, 0x9c, 0x27,
+	0x89, 0x9f, 0x06, 0xa5, 0xee, 0x9a, 0xaa, 0xf9, 0xfc, 0x3c, 0x14, 0x1d, 0xb3, 0x6b, 0xaa, 0xf9,
+	0x14, 0x76, 0x08, 0x34, 0x4b, 0xb3, 0x89, 0xda, 0xfd, 0xbf, 0x6e, 0xce, 0x17, 0x04, 0x2d, 0x97,
+	0xa7, 0x32, 0xe7, 0xf1, 0x2b, 0x26, 0x84, 0x1f, 0xb2, 0x1b, 0x0d, 0xef, 0x42, 0x75, 0xce, 0x83,
+	0xcd, 0x90, 0xad, 0x23, 0x5b, 0x6f, 0xa4, 0x94, 0xb8, 0x3c, 0x60, 0x54, 0x67, 0xb1, 0x0d, 0xa6,
+	0x58, 0xce, 0xf4, 0x6e, 0x2d, 0xaa, 0xe0, 0xf6, 0x04, 0xd5, 0x9d, 0x13, 0xdc, 0x82, 0x3a, 0x5b,
+	0x2d, 0xe4, 0x3b, 0x6d, 0x68, 0xe9, 0xda, 0x9a, 0x0a, 0x28, 0xa3, 0x5e, 0x1b, 0x6a, 0xd7, 0x57,
+	0xc4, 0x00, 0x7b, 0xe3, 0x37, 0xc7, 0xa7, 0xde, 0x5b, 0xdb, 0xe8, 0x3d, 0x82, 0xff, 0x6f, 0x5c,
+	0x00, 0xd7, 0xa0, 0x3a, 0x39, 0x79, 0x76, 0x66, 0x1b, 0xaa, 0x94, 0x7a, 0x2f, 0x3c, 0x77, 0x6a,
+	0x23, 0x85, 0x87, 0xae, 0xeb, 0x8d, 0xa7, 0x76, 0xa5, 0xf7, 0x18, 0x1a, 0x3b, 0xbf, 0xa9, 0x04,
+	0x67, 0xa3, 0xd1, 0xd8, 0x36, 0x14, 0x7a, 0x3a, 0x9c, 0x0e, 0x6d, 0x84, 0xeb, 0x60, 0xb9, 0x2f,
+	0x47, 0x13, 0xcf, 0xae, 0xa8, 0xa0, 0x77, 0x7e, 0x32, 0xb5, 0xcd, 0xe3, 0xfb, 0x97, 0x6b, 0x62,
+	0xfc, 0x58, 0x13, 0xe3, 0x6a, 0x4d, 0xd0, 0xe7, 0x82, 0xa0, 0x6f, 0x05, 0x41, 0xdf, 0x0b, 0x82,
+	0x2e, 0x0b, 0x82, 0x7e, 0x16, 0x04, 0xfd, 0x2e, 0x88, 0x71, 0x55, 0x10, 0xf4, 0xf5, 0x17, 0x31,
+	0x66, 0x7b, 0xfa, 0x15, 0x3f, 0xfc, 0x13, 0x00, 0x00, 0xff, 0xff, 0xfb, 0xcb, 0x19, 0x61, 0xf4,
+	0x02, 0x00, 0x00,
 }

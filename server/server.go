@@ -1,7 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"io"
 	"log"
 	"os/exec"
@@ -11,23 +15,33 @@ import (
 	"github.com/evanphx/mesh/instance"
 	"github.com/evanphx/mesh/pb"
 	"github.com/evanphx/mesh/protocol/pipe"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-multierror"
 	"github.com/kr/pty"
+	uuid "github.com/satori/go.uuid"
+	"golang.org/x/crypto/ssh"
 )
 
 type Server struct {
 	id   string
 	inst *instance.Instance
 	lp   *pipe.ListenPipe
+	log  hclog.Logger
 }
 
-func NewServer(id, network string) (*Server, error) {
+type ServerOptions struct {
+	Id      string
+	Network string
+	Debug   bool
+}
+
+func NewServer(opts ServerOptions) (*Server, error) {
 	inst, err := instance.InitNew()
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = inst.ListenTCP(":0", []string{network})
+	_, err = inst.ListenTCP(":0", []string{opts.Network})
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +49,7 @@ func NewServer(id, network string) (*Server, error) {
 	adver := &pb.Advertisement{
 		Pipe: "mesh-shell",
 		Tags: map[string]string{
-			"id": id,
+			"id": opts.Id,
 		},
 	}
 
@@ -44,10 +58,24 @@ func NewServer(id, network string) (*Server, error) {
 		return nil, err
 	}
 
+	logLevel := hclog.Info
+
+	if opts.Debug {
+		logLevel = hclog.Debug
+	}
+
+	l := hclog.New(&hclog.LoggerOptions{
+		Name:  "mshd",
+		Level: logLevel,
+	})
+
+	l.Info("listening for connections", "network", opts.Network, "pipe", "mesh-shell", "id", opts.Id)
+
 	serv := &Server{
-		id:   id,
+		id:   opts.Id,
 		inst: inst,
 		lp:   lp,
+		log:  l,
 	}
 
 	return serv, nil
@@ -63,7 +91,7 @@ func (s *Server) Accept(ctx context.Context) error {
 		go func() {
 			err := s.handle(&ServerSession{pipe: pipe})
 			if err != nil {
-				log.Printf("error handling session: %s\n", err)
+				s.log.Error("error handling session", "error", err)
 			}
 		}()
 	}
@@ -109,7 +137,11 @@ func (s *Server) handle(sess *ServerSession) error {
 		return err
 	}
 
-	log.Printf("client ident: %s\n", hello.Ident)
+	id := uuid.NewV4().String()
+
+	cLogger := s.log.With("id", id)
+
+	cLogger.Debug("client connected", "ident", hello.Ident)
 
 	var shello msg.Hello
 	shello.Ident = "mshd v0.1"
@@ -119,13 +151,135 @@ func (s *Server) handle(sess *ServerSession) error {
 		return err
 	}
 
+	var (
+		user string
+		keys Keys
+		auth bool
+	)
+
+authLoop:
+	for {
+		var aa msg.AuthAttempt
+
+		err = sess.recv(ctx, &aa)
+		if err != nil {
+			return err
+		}
+
+		cLogger.Debug("auth attempt", "type", aa.Type)
+
+		if aa.Type == msg.PUBKEY {
+			if user != aa.User {
+				user = aa.User
+				keys, err = KeysForUser(user)
+				if err != nil {
+					cLogger.Error("error reading keys", "error", err)
+				}
+			}
+
+			cLogger.Debug("available keys", "count", len(keys))
+
+			var found *Key
+
+			for _, k := range keys {
+				if bytes.Equal(aa.Data, k.Key.Marshal()) {
+					found = k
+					break
+				}
+			}
+
+			if found == nil {
+				var ac msg.AuthChallenge
+				ac.Type = msg.REJECT
+
+				err = sess.send(ctx, &ac)
+				if err != nil {
+					return err
+				}
+				continue
+			}
+
+			h := sha256.Sum256(found.Key.Marshal())
+			cLogger.Debug("issuing challenge", "key", base64.StdEncoding.EncodeToString(h[:]))
+
+			nonce := make([]byte, 128)
+
+			_, err = io.ReadFull(rand.Reader, nonce)
+			if err != nil {
+				return err
+			}
+
+			var ac msg.AuthChallenge
+			ac.Type = msg.SIGN
+			ac.Nonce = nonce
+
+			err = sess.send(ctx, &ac)
+			if err != nil {
+				return err
+			}
+
+			var ar msg.AuthResponse
+
+			err = sess.recv(ctx, &ar)
+			if err != nil {
+				return err
+			}
+
+			sig := &ssh.Signature{
+				Format: ar.Format,
+				Blob:   ar.Answer,
+			}
+
+			cLogger.Debug("verifying signature")
+
+			err = found.Key.Verify(nonce, sig)
+			if err == nil {
+				var ac msg.AuthChallenge
+				ac.Type = msg.ACCEPT
+
+				cLogger.Info("successful login", "request_user", aa.User, "key_comment", found.Comment, "key_options", found.Options)
+
+				err = sess.send(ctx, &ac)
+				if err != nil {
+					return err
+				}
+
+				auth = true
+				break authLoop
+			} else {
+				var ac msg.AuthChallenge
+				ac.Type = msg.REJECT
+
+				cLogger.Debug("rejected signature")
+
+				err = sess.send(ctx, &ac)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			var ac msg.AuthChallenge
+			ac.Type = msg.REJECT
+
+			err = sess.send(ctx, &ac)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if !auth {
+		cLogger.Info("rejected auth attempt", "request_user", user)
+		return nil
+	}
+
 	var req msg.RequestShell
 	err = sess.recv(ctx, &req)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("requesting shell...")
+	cLogger.Debug("starting shell")
 
 	err = s.shell(ctx, sess, &req)
 

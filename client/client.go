@@ -3,12 +3,17 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"os/user"
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/evanphx/mesh"
@@ -22,19 +27,26 @@ type Client struct {
 	inst *instance.Instance
 
 	pipe *pipe.Pipe
+
+	options ClientOptions
 }
 
-func NewClient() (*Client, error) {
+type ClientOptions struct {
+	Verbose bool
+}
+
+func NewClient(options ClientOptions) (*Client, error) {
 	inst, err := instance.InitNew()
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{inst: inst}, nil
+	return &Client{inst: inst, options: options}, nil
 }
 
 func (c *Client) Connect(ctx context.Context, network, id string) error {
 	return log.RunSpinner(ctx, func(s *log.Spinner) error {
+		s.Verbose = c.options.Verbose
 		s.Printf("discovering endpoints")
 
 		err := c.inst.FindNodes(ctx, network)
@@ -109,7 +121,81 @@ func (c *Client) handshake(ctx context.Context, s *log.Spinner) error {
 	}
 
 	s.Printf("server ident: %s", shello.Ident)
-	return nil
+
+	sockAddr := os.Getenv("SSH_AUTH_SOCK")
+
+	sock, err := net.Dial("unix", sockAddr)
+	if err != nil {
+		return err
+	}
+
+	sshAgent := agent.NewClient(sock)
+
+	keys, err := sshAgent.List()
+	if err != nil {
+		return err
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		return err
+	}
+
+	for _, k := range keys {
+		h := sha256.Sum256(k.Blob)
+
+		s.Printf("offering %s %s (%s)", base64.StdEncoding.EncodeToString(h[:]), k.Comment, k.Type())
+
+		var aa msg.AuthAttempt
+		aa.Type = msg.PUBKEY
+		aa.Data = k.Marshal()
+		aa.User = u.Username
+
+		err = c.send(ctx, &aa)
+		if err != nil {
+			return err
+		}
+
+		var ac msg.AuthChallenge
+
+		err = c.recv(ctx, &ac)
+		if err != nil {
+			return err
+		}
+
+		if ac.Type == msg.SIGN {
+			s.Printf("calculating challenge")
+			sig, err := sshAgent.Sign(k, ac.Nonce)
+			if err != nil {
+				continue
+			}
+
+			var ar msg.AuthResponse
+			ar.Answer = sig.Blob
+			ar.Format = sig.Format
+
+			err = c.send(ctx, &ar)
+			if err != nil {
+				return err
+			}
+
+			var ac msg.AuthChallenge
+
+			err = c.recv(ctx, &ac)
+			if err != nil {
+				return err
+			}
+
+			if ac.Type == msg.ACCEPT {
+				s.Printf("key accepted")
+				return nil
+			}
+
+			s.Printf("key rejected")
+		}
+	}
+
+	return fmt.Errorf("unable to authenticate")
 }
 
 func (c *Client) nextStream() int64 {

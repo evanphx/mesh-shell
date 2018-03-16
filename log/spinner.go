@@ -31,6 +31,8 @@ func (s *Spinner) Start(ctx context.Context) {
 func RunSpinner(ctx context.Context, f func(s *Spinner) error) error {
 	var s Spinner
 
+	s.Verbose = true
+
 	ctx, cancel := context.WithCancel(ctx)
 
 	defer func() {
@@ -72,6 +74,18 @@ func (s *Spinner) spin() {
 	for {
 		select {
 		case <-s.ctx.Done():
+			if s.Verbose {
+			outer:
+				for {
+					select {
+					case str := <-s.msg:
+						fmt.Fprintf(s.out, "\r\x1b[K- %s\n", str)
+					default:
+						break outer
+					}
+				}
+			}
+
 			if s.Verbose && msg != "" {
 				fmt.Fprintf(s.out, "\r\x1b[K- %s\n", msg)
 			} else {

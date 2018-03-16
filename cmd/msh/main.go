@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/evanphx/mesh-shell/client"
+)
+
+var (
+	fVerbose = flag.Bool("v", false, "set verbose output")
 )
 
 func main() {
@@ -15,7 +19,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	c, err := client.NewClient()
+	c, err := client.NewClient(client.ClientOptions{
+		Verbose: *fVerbose,
+	})
+
 	if err != nil {
 		fmt.Printf("Error creating client: %s\n", err)
 		os.Exit(1)
@@ -27,8 +34,6 @@ func main() {
 		fmt.Printf("Error connecting: %s\n", err)
 		os.Exit(1)
 	}
-
-	log.Printf("starting shell...\n")
 
 	err = c.StartShell(ctx)
 	if err != nil {
