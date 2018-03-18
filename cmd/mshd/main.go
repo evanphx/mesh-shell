@@ -11,9 +11,12 @@ import (
 )
 
 var (
-	fId      = flag.String("id", "", "identify to advertise (default to hostname)")
-	fNetwork = flag.String("network", "", "network to advertise on")
-	fVerbose = flag.Bool("v", false, "be verbose with the output")
+	fId       = flag.String("id", "", "identify to advertise (default to hostname)")
+	fNetwork  = flag.String("network", "", "network to advertise on")
+	fVerbose  = flag.Bool("v", false, "be verbose with the output")
+	fJSON     = flag.Bool("json", false, "emit logs in json format")
+	fConfig   = flag.String("config", "", "config file to load")
+	fSoloPort = flag.Int("solo-port", 0, "listen on tcp port in non-network mode")
 )
 
 func main() {
@@ -43,6 +46,9 @@ func main() {
 		Id:      id,
 		Network: network,
 		Debug:   *fVerbose,
+		JSON:    *fJSON,
+		Config:  *fConfig,
+		Solo:    *fSoloPort,
 	}
 
 	serv, err := server.NewServer(opts)

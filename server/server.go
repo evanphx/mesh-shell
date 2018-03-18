@@ -6,15 +6,28 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
+	"net"
 	"os/exec"
+	"os/user"
+	"path/filepath"
+	"strconv"
 	"sync"
+	"syscall"
 
+	"gopkg.in/yaml.v2"
+
+	"github.com/evanphx/mesh-shell/backend"
+	"github.com/evanphx/mesh-shell/backend/authorized_keys"
+	"github.com/evanphx/mesh-shell/backend/github"
 	"github.com/evanphx/mesh-shell/msg"
 	"github.com/evanphx/mesh/instance"
 	"github.com/evanphx/mesh/pb"
 	"github.com/evanphx/mesh/protocol/pipe"
+	"github.com/gravitational/teleport/lib/shell"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-multierror"
 	"github.com/kr/pty"
@@ -27,29 +40,80 @@ type Server struct {
 	inst *instance.Instance
 	lp   *pipe.ListenPipe
 	log  hclog.Logger
+
+	keys backend.KeyRetrieval
+
+	config Config
 }
 
 type ServerOptions struct {
+	Config  string
 	Id      string
 	Network string
+	Solo    int
 	Debug   bool
+	JSON    bool
 }
 
 func NewServer(opts ServerOptions) (*Server, error) {
-	inst, err := instance.InitNew()
+	var cfg Config
+
+	if opts.Config != "" {
+		data, err := ioutil.ReadFile(opts.Config)
+		if err != nil {
+			return nil, err
+		}
+
+		err = yaml.Unmarshal(data, &cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if opts.Id == "" {
+		cfg.Id = opts.Id
+	}
+
+	if opts.Network == "" {
+		cfg.Network = opts.Network
+	}
+
+	if opts.Solo != 0 {
+		cfg.SoloPort = opts.Solo
+	}
+
+	instopts := instance.Options{
+		AdvertiseMDNS: true,
+	}
+
+	if cfg.SoloPort != 0 {
+		instopts.NoNetworkAuth = true
+		cfg.Id = "solo"
+	}
+
+	inst, err := instance.Init(instopts)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = inst.ListenTCP(":0", []string{opts.Network})
-	if err != nil {
-		return nil, err
+	var listenAddr *net.TCPAddr
+
+	if cfg.SoloPort != 0 {
+		listenAddr, err = inst.ListenTCP(fmt.Sprintf(":%d", cfg.SoloPort), []string{"-"})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		listenAddr, err = inst.ListenTCP(":0", []string{cfg.Network})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	adver := &pb.Advertisement{
 		Pipe: "mesh-shell",
 		Tags: map[string]string{
-			"id": opts.Id,
+			"id": cfg.Id,
 		},
 	}
 
@@ -65,17 +129,39 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	}
 
 	l := hclog.New(&hclog.LoggerOptions{
-		Name:  "mshd",
-		Level: logLevel,
+		Name:       "mshd",
+		Level:      logLevel,
+		JSONFormat: opts.JSON,
 	})
 
-	l.Info("listening for connections", "network", opts.Network, "pipe", "mesh-shell", "id", opts.Id)
+	l.Debug("pipe listen created", "adver", adver.String())
+
+	if cfg.SoloPort != 0 {
+		l.Info("listening for connections", "address", listenAddr)
+	} else {
+		l.Info("listening for connections", "network", opts.Network, "pipe", "mesh-shell", "id", opts.Id)
+	}
+
+	var keys backend.KeyRetrieval
+
+	if cfg.Auth.Github.Org != "" {
+		var gh github.Backend
+		gh.GithubUser = cfg.Auth.Github.AuthUser
+		gh.GithubToken = cfg.Auth.Github.AuthToken
+		gh.GithubOrg = cfg.Auth.Github.Org
+		gh.GroupMembership = cfg.Auth.Github.Teams
+		keys = &gh
+	} else {
+		keys = &authorized_keys.Backend{}
+	}
 
 	serv := &Server{
-		id:   opts.Id,
-		inst: inst,
-		lp:   lp,
-		log:  l,
+		id:     opts.Id,
+		inst:   inst,
+		lp:     lp,
+		log:    l,
+		keys:   keys,
+		config: cfg,
 	}
 
 	return serv, nil
@@ -89,7 +175,10 @@ func (s *Server) Accept(ctx context.Context) error {
 		}
 
 		go func() {
-			err := s.handle(&ServerSession{pipe: pipe})
+			id := uuid.NewV4().String()
+			logger := s.log.With("id", id)
+
+			err := s.handle(&ServerSession{pipe: pipe, log: logger})
 			if err != nil {
 				s.log.Error("error handling session", "error", err)
 			}
@@ -99,6 +188,9 @@ func (s *Server) Accept(ctx context.Context) error {
 
 type ServerSession struct {
 	pipe *pipe.Pipe
+	user string
+
+	log hclog.Logger
 }
 
 type Marshaler interface {
@@ -137,11 +229,7 @@ func (s *Server) handle(sess *ServerSession) error {
 		return err
 	}
 
-	id := uuid.NewV4().String()
-
-	cLogger := s.log.With("id", id)
-
-	cLogger.Debug("client connected", "ident", hello.Ident)
+	sess.log.Debug("client connected", "ident", hello.Ident)
 
 	var shello msg.Hello
 	shello.Ident = "mshd v0.1"
@@ -153,7 +241,7 @@ func (s *Server) handle(sess *ServerSession) error {
 
 	var (
 		user string
-		keys Keys
+		keys backend.Keys
 		auth bool
 	)
 
@@ -166,20 +254,20 @@ authLoop:
 			return err
 		}
 
-		cLogger.Debug("auth attempt", "type", aa.Type)
+		sess.log.Debug("auth attempt", "type", aa.Type)
 
 		if aa.Type == msg.PUBKEY {
 			if user != aa.User {
 				user = aa.User
-				keys, err = KeysForUser(user)
+				keys, err = s.keys.UserKeys(user)
 				if err != nil {
-					cLogger.Error("error reading keys", "error", err)
+					sess.log.Error("error reading keys", "error", err)
 				}
 			}
 
-			cLogger.Debug("available keys", "count", len(keys))
+			sess.log.Debug("available keys", "count", len(keys))
 
-			var found *Key
+			var found *backend.Key
 
 			for _, k := range keys {
 				if bytes.Equal(aa.Data, k.Key.Marshal()) {
@@ -200,7 +288,7 @@ authLoop:
 			}
 
 			h := sha256.Sum256(found.Key.Marshal())
-			cLogger.Debug("issuing challenge", "key", base64.StdEncoding.EncodeToString(h[:]))
+			sess.log.Debug("issuing challenge", "key", base64.StdEncoding.EncodeToString(h[:]))
 
 			nonce := make([]byte, 128)
 
@@ -230,27 +318,28 @@ authLoop:
 				Blob:   ar.Answer,
 			}
 
-			cLogger.Debug("verifying signature")
+			sess.log.Debug("verifying signature")
 
 			err = found.Key.Verify(nonce, sig)
 			if err == nil {
 				var ac msg.AuthChallenge
 				ac.Type = msg.ACCEPT
 
-				cLogger.Info("successful login", "request_user", aa.User, "key_comment", found.Comment, "key_options", found.Options)
+				sess.log.Info("successful login", "request_user", aa.User, "key_comment", found.Comment, "key_options", found.Options)
 
 				err = sess.send(ctx, &ac)
 				if err != nil {
 					return err
 				}
 
+				sess.user = aa.User
 				auth = true
 				break authLoop
 			} else {
 				var ac msg.AuthChallenge
 				ac.Type = msg.REJECT
 
-				cLogger.Debug("rejected signature")
+				sess.log.Debug("rejected signature")
 
 				err = sess.send(ctx, &ac)
 				if err != nil {
@@ -269,7 +358,7 @@ authLoop:
 	}
 
 	if !auth {
-		cLogger.Info("rejected auth attempt", "request_user", user)
+		sess.log.Info("rejected auth attempt", "request_user", user)
 		return nil
 	}
 
@@ -278,8 +367,6 @@ authLoop:
 	if err != nil {
 		return err
 	}
-
-	cLogger.Debug("starting shell")
 
 	err = s.shell(ctx, sess, &req)
 
@@ -290,17 +377,116 @@ authLoop:
 
 	sess.pipe.Close(ctx)
 
+	sess.log.Debug("session ended")
+
 	return err
 }
 
+func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, userName string, rs *msg.RequestShell) (*exec.Cmd, error) {
+	shell, err := shell.GetLoginShell(userName)
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := user.Lookup(userName)
+	if err != nil {
+		return nil, err
+	}
+
+	c := exec.CommandContext(ctx, shell)
+	c.Env = []string{
+		"LANG=en_US.UTF-8",
+		"SHELL=" + shell,
+		"USER=" + userName,
+		getDefaultEnvPath(u.Uid, loginDefsPath),
+		"MSH_PEER=" + sess.pipe.PeerIdentity().Short(),
+		fmt.Sprintf("SSH_CLIENT=%s 0 0", sess.pipe.PeerIdentity().Short()),
+		fmt.Sprintf("SSH_CONNECTION=%s 0 %s 0", sess.pipe.PeerIdentity().Short(), s.inst.Peer.Identity().Short()),
+	}
+
+	c.Dir = u.HomeDir
+
+	c.Env = append(c.Env, rs.Env...)
+
+	// this configures shell to run in 'login' mode. from openssh source:
+	// "If we have no command, execute the shell.  In this case, the shell
+	// name to be passed in argv[0] is preceded by '-' to indicate that
+	// this is a login shell."
+	// https://github.com/openssh/openssh-portable/blob/master/session.c
+	c.Args = []string{"-" + filepath.Base(shell)}
+
+	c.SysProcAttr = &syscall.SysProcAttr{}
+
+	me, err := user.Current()
+	if err != nil {
+		return nil, err
+	}
+
+	if me.Uid != u.Uid || me.Gid != u.Gid {
+		userGroups, err := u.GroupIds()
+		if err != nil {
+			return nil, err
+		}
+
+		groups := make([]uint32, 0)
+		for _, sgid := range userGroups {
+			igid, err := strconv.Atoi(sgid)
+			if err != nil {
+				s.log.Warn("unable to interpret user group", "group", sgid)
+			} else {
+				groups = append(groups, uint32(igid))
+			}
+		}
+
+		uid, err := strconv.Atoi(u.Uid)
+		if err != nil {
+			return nil, err
+		}
+
+		gid, err := strconv.Atoi(u.Gid)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(groups) == 0 {
+			groups = append(groups, uint32(gid))
+		}
+
+		c.SysProcAttr.Credential = &syscall.Credential{
+			Uid:    uint32(uid),
+			Gid:    uint32(gid),
+			Groups: groups,
+		}
+
+		c.SysProcAttr.Setsid = true
+	}
+
+	return c, nil
+}
+
 func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.RequestShell) error {
-	c := exec.Command("bash")
-	c.Env = []string{"PS1=msh> ", "PATH=/bin:/usr/bin:/usr/local/bin"}
+	user := sess.user
+
+	if s.config.LocalUser.Force != "" {
+		user = s.config.LocalUser.Force
+	}
+
+	c, err := s.constructCommand(ctx, sess, user, req)
+	if err != nil {
+		return err
+	}
 
 	f, err := pty.Start(c)
 	if err != nil {
 		return err
 	}
+
+	sess.log.Info("shell started", "local_user", user)
+
+	pty.Setsize(f, &pty.Winsize{
+		Rows: uint16(req.Rows),
+		Cols: uint16(req.Cols),
+	})
 
 	var (
 		pool sync.Pool
@@ -359,6 +545,11 @@ func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.Reques
 			}
 
 			switch ctl.Code {
+			case msg.WINCH:
+				pty.Setsize(f, &pty.Winsize{
+					Rows: uint16(ctl.Rows),
+					Cols: uint16(ctl.Cols),
+				})
 			case msg.CLOSE:
 				f.Close()
 			case msg.DATA:
@@ -377,7 +568,6 @@ func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.Reques
 	}()
 
 	c.Wait()
-	log.Printf("command exitted\n")
 	f.Close()
 	readcancel()
 

@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"os/user"
 	"syscall"
 	"time"
 
@@ -44,7 +43,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	return &Client{inst: inst, options: options}, nil
 }
 
-func (c *Client) Connect(ctx context.Context, network, id string) error {
+func (c *Client) Connect(ctx context.Context, network, id, user string) error {
 	return log.RunSpinner(ctx, func(s *log.Spinner) error {
 		s.Verbose = c.options.Verbose
 		s.Printf("discovering endpoints")
@@ -54,7 +53,7 @@ func (c *Client) Connect(ctx context.Context, network, id string) error {
 			return err
 		}
 
-		s.Printf("connecting to %s", id)
+		s.Printf("connecting to %s@%s:%s", user, id, network)
 
 		time.Sleep(1 * time.Second)
 
@@ -74,7 +73,41 @@ func (c *Client) Connect(ctx context.Context, network, id string) error {
 
 		s.Printf("handshaking with %s", pipe.PeerIdentity().Short())
 
-		return c.handshake(ctx, s)
+		return c.handshake(ctx, s, user)
+	})
+}
+
+func (c *Client) ConnectSolo(ctx context.Context, user, addr string) error {
+	return log.RunSpinner(ctx, func(s *log.Spinner) error {
+		s.Verbose = c.options.Verbose
+		s.Printf("discovering endpoints")
+
+		err := c.inst.ConnectTCP(ctx, addr, "-")
+		if err != nil {
+			return err
+		}
+
+		s.Printf("connecting to %s@%s", user, addr)
+
+		time.Sleep(1 * time.Second)
+
+		sel := &mesh.PipeSelector{
+			Pipe: "mesh-shell",
+			Tags: map[string]string{
+				"id": "solo",
+			},
+		}
+
+		pipe, err := c.inst.Connect(ctx, sel)
+		if err != nil {
+			return err
+		}
+
+		c.pipe = pipe
+
+		s.Printf("handshaking with %s", pipe.PeerIdentity().Short())
+
+		return c.handshake(ctx, s, user)
 	})
 }
 
@@ -104,7 +137,7 @@ func (c *Client) recv(ctx context.Context, m Unmarshaler) error {
 	return m.Unmarshal(data)
 }
 
-func (c *Client) handshake(ctx context.Context, s *log.Spinner) error {
+func (c *Client) handshake(ctx context.Context, s *log.Spinner, user string) error {
 	var hello msg.Hello
 	hello.Ident = "msh v0.1"
 
@@ -136,11 +169,6 @@ func (c *Client) handshake(ctx context.Context, s *log.Spinner) error {
 		return err
 	}
 
-	u, err := user.Current()
-	if err != nil {
-		return err
-	}
-
 	for _, k := range keys {
 		h := sha256.Sum256(k.Blob)
 
@@ -149,7 +177,7 @@ func (c *Client) handshake(ctx context.Context, s *log.Spinner) error {
 		var aa msg.AuthAttempt
 		aa.Type = msg.PUBKEY
 		aa.Data = k.Marshal()
-		aa.User = u.Username
+		aa.User = user
 
 		err = c.send(ctx, &aa)
 		if err != nil {
@@ -225,6 +253,21 @@ func (c *Client) StartShell(ctx context.Context) error {
 	defer cancel()
 
 	var req msg.RequestShell
+
+	req.Env = []string{
+		"TERM=" + os.Getenv("TERM"),
+	}
+
+	winch := make(chan os.Signal, 1)
+
+	signal.Notify(winch, syscall.SIGWINCH)
+
+	width, height, err := terminal.GetSize(0)
+	if err == nil {
+		req.Rows = int32(height)
+		req.Cols = int32(width)
+	}
+
 	req.Id = c.nextStream()
 
 	err = c.send(ctx, &req)
@@ -279,6 +322,21 @@ func (c *Client) StartShell(ctx context.Context) error {
 			return nil
 		case <-ctx.Done():
 			return nil
+		case <-winch:
+			width, height, err := terminal.GetSize(0)
+			if err == nil {
+				var ctl msg.ControlMessage
+
+				ctl.Code = msg.WINCH
+				ctl.Rows = int32(height)
+				ctl.Cols = int32(width)
+
+				err = c.send(ctx, &ctl)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error sending: %s", err)
+					return nil
+				}
+			}
 		case usable := <-input:
 			// fmt.Fprintf(os.Stderr, "dn(%v, %d) ", usable, bytes.IndexByte(usable, 10))
 			if idx := bytes.IndexByte(usable, 13); idx != -1 {

@@ -40,6 +40,9 @@ message RequestExec {
 
 message RequestShell {
   int64 id = 1;
+  repeated string env = 2;
+  int32 rows = 3;
+  int32 cols = 4;
 }
 
 enum ControlCode {
@@ -47,6 +50,7 @@ enum ControlCode {
   DATA = 1;
   CLOSE = 2;
   EXIT = 3;
+  WINCH = 4;
 }
 
 message ControlMessage {
@@ -55,4 +59,6 @@ message ControlMessage {
   int32 sub = 3;
   bytes data = 4;
   int32 exit_code = 5;
+  int32 rows = 6;
+  int32 cols = 7;
 }

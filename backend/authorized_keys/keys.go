@@ -1,22 +1,18 @@
-package server
+package authorized_keys
 
 import (
 	"io/ioutil"
 	"os/user"
 	"path/filepath"
 
+	"github.com/evanphx/mesh-shell/backend"
 	"golang.org/x/crypto/ssh"
 )
 
-type Key struct {
-	Key     ssh.PublicKey
-	Comment string
-	Options []string
+type Backend struct {
 }
 
-type Keys []*Key
-
-func KeysForUser(n string) (Keys, error) {
+func (b *Backend) UserKeys(n string) (backend.Keys, error) {
 	u, err := user.Lookup(n)
 	if err != nil {
 		return nil, err
@@ -29,7 +25,7 @@ func KeysForUser(n string) (Keys, error) {
 		return nil, err
 	}
 
-	var keys Keys
+	var keys backend.Keys
 
 	for len(data) > 0 {
 		out, comment, options, rest, err := ssh.ParseAuthorizedKey(data)
@@ -37,7 +33,7 @@ func KeysForUser(n string) (Keys, error) {
 			return nil, err
 		}
 
-		keys = append(keys, &Key{
+		keys = append(keys, &backend.Key{
 			Key:     out,
 			Comment: comment,
 			Options: options,
