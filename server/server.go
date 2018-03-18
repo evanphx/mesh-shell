@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -393,6 +394,20 @@ func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, user
 		return nil, err
 	}
 
+	remoteId := sess.pipe.RemoteID()
+	port := "0"
+
+	host, sport, err := net.SplitHostPort(remoteId)
+	if err == nil {
+		remoteId = host
+		port = sport
+	}
+
+	identity := s.inst.Peer.Identity().Short()
+	if s.config.SoloPort != 0 {
+		identity = "0.0.0.0"
+	}
+
 	c := exec.CommandContext(ctx, shell)
 	c.Env = []string{
 		"LANG=en_US.UTF-8",
@@ -400,8 +415,8 @@ func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, user
 		"USER=" + userName,
 		getDefaultEnvPath(u.Uid, loginDefsPath),
 		"MSH_PEER=" + sess.pipe.PeerIdentity().Short(),
-		fmt.Sprintf("SSH_CLIENT=%s 0 0", sess.pipe.PeerIdentity().Short()),
-		fmt.Sprintf("SSH_CONNECTION=%s 0 %s 0", sess.pipe.PeerIdentity().Short(), s.inst.Peer.Identity().Short()),
+		fmt.Sprintf("SSH_CLIENT=%s %s %d", remoteId, port, s.config.SoloPort),
+		fmt.Sprintf("SSH_CONNECTION=%s %s %s %d", remoteId, port, identity, s.config.SoloPort),
 	}
 
 	c.Dir = u.HomeDir
@@ -464,6 +479,29 @@ func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, user
 	return c, nil
 }
 
+func ptyStart(c *exec.Cmd) (*os.File, error) {
+	pty, tty, err := pty.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer tty.Close()
+	c.Stdout = tty
+	c.Stdin = tty
+	c.Stderr = tty
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	c.SysProcAttr.Setctty = true
+	c.SysProcAttr.Setsid = true
+	c.Env = append(c.Env, "SSH_TTY="+tty.Name())
+	err = c.Start()
+	if err != nil {
+		pty.Close()
+		return nil, err
+	}
+	return pty, err
+}
+
 func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.RequestShell) error {
 	user := sess.user
 
@@ -476,7 +514,7 @@ func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.Reques
 		return err
 	}
 
-	f, err := pty.Start(c)
+	f, err := ptyStart(c)
 	if err != nil {
 		return err
 	}
