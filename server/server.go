@@ -135,8 +135,6 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		JSONFormat: opts.JSON,
 	})
 
-	l.Debug("pipe listen created", "adver", adver.String())
-
 	if cfg.SoloPort != 0 {
 		l.Info("listening for connections", "address", listenAddr)
 	} else {
@@ -190,6 +188,8 @@ func (s *Server) Accept(ctx context.Context) error {
 type ServerSession struct {
 	pipe *pipe.Pipe
 	user string
+
+	agentPipe string
 
 	log hclog.Logger
 }
@@ -363,13 +363,17 @@ authLoop:
 		return nil
 	}
 
-	var req msg.RequestShell
+	var req msg.RequestCommand
 	err = sess.recv(ctx, &req)
 	if err != nil {
 		return err
 	}
 
-	err = s.shell(ctx, sess, &req)
+	if req.Tty {
+		err = s.runPTY(ctx, sess, &req)
+	} else {
+		err = s.runCommand(ctx, sess, &req)
+	}
 
 	var ctl msg.ControlMessage
 	ctl.Code = msg.CLOSE
@@ -383,7 +387,57 @@ authLoop:
 	return err
 }
 
-func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, userName string, rs *msg.RequestShell) (*exec.Cmd, error) {
+func (s *Server) setupAgentForward(ctx context.Context, sess *ServerSession) (string, string, error) {
+	dir, err := ioutil.TempDir("", "msh-agent")
+	if err != nil {
+		return "", "", err
+	}
+
+	socket := filepath.Join(dir, fmt.Sprintf("agent.%d", os.Getpid()))
+
+	ul, err := net.Listen("unix", socket)
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", "", err
+	}
+
+	go func() {
+		for {
+			conn, err := ul.Accept()
+			if err != nil {
+				ul.Close()
+				return
+			}
+
+			cp, err := sess.pipe.OpenSub()
+			if err != nil {
+				log.Printf("unable to open subpipe: %s", err)
+				conn.Close()
+				continue
+			}
+
+			var wg sync.WaitGroup
+
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+				io.Copy(pipe.Writer(ctx, cp), conn)
+			}()
+
+			io.Copy(conn, pipe.Reader(ctx, cp))
+
+			wg.Wait()
+
+			conn.Close()
+			cp.Close(ctx)
+		}
+	}()
+
+	return dir, socket, nil
+}
+
+func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, userName string, rs *msg.RequestCommand) (*exec.Cmd, error) {
 	shell, err := shell.GetLoginShell(userName)
 	if err != nil {
 		return nil, err
@@ -408,7 +462,21 @@ func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, user
 		identity = "0.0.0.0"
 	}
 
-	c := exec.CommandContext(ctx, shell)
+	var c *exec.Cmd
+
+	if rs.Command == "" {
+		c = exec.CommandContext(ctx, shell)
+
+		// this configures shell to run in 'login' mode. from openssh source:
+		// "If we have no command, execute the shell.  In this case, the shell
+		// name to be passed in argv[0] is preceded by '-' to indicate that
+		// this is a login shell."
+		// https://github.com/openssh/openssh-portable/blob/master/session.c
+		c.Args = []string{"-" + filepath.Base(shell)}
+	} else {
+		c = exec.CommandContext(ctx, rs.Command, rs.Args...)
+	}
+
 	c.Env = []string{
 		"LANG=en_US.UTF-8",
 		"SHELL=" + shell,
@@ -422,13 +490,6 @@ func (s *Server) constructCommand(ctx context.Context, sess *ServerSession, user
 	c.Dir = u.HomeDir
 
 	c.Env = append(c.Env, rs.Env...)
-
-	// this configures shell to run in 'login' mode. from openssh source:
-	// "If we have no command, execute the shell.  In this case, the shell
-	// name to be passed in argv[0] is preceded by '-' to indicate that
-	// this is a login shell."
-	// https://github.com/openssh/openssh-portable/blob/master/session.c
-	c.Args = []string{"-" + filepath.Base(shell)}
 
 	c.SysProcAttr = &syscall.SysProcAttr{}
 
@@ -502,7 +563,7 @@ func ptyStart(c *exec.Cmd) (*os.File, error) {
 	return pty, err
 }
 
-func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.RequestShell) error {
+func (s *Server) runCommand(ctx context.Context, sess *ServerSession, req *msg.RequestCommand) error {
 	user := sess.user
 
 	if s.config.LocalUser.Force != "" {
@@ -512,6 +573,179 @@ func (s *Server) shell(ctx context.Context, sess *ServerSession, req *msg.Reques
 	c, err := s.constructCommand(ctx, sess, user, req)
 	if err != nil {
 		return err
+	}
+
+	dir, socket, err := s.setupAgentForward(ctx, sess)
+	if err != nil {
+		sess.log.Error("unable to setup agent forward", "error", err)
+	} else {
+		defer os.RemoveAll(dir)
+		c.Env = append(c.Env, "SSH_AUTH_SOCK="+socket)
+	}
+
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
+	stderr, err := c.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	stdin, err := c.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	err = c.Start()
+	if err != nil {
+		return err
+	}
+
+	sess.log.Info("command started", "local_user", user, "command", req.Command)
+
+	var (
+		pool sync.Pool
+		wg   sync.WaitGroup
+	)
+
+	pool.New = func() interface{} {
+		return make([]byte, 1024)
+	}
+
+	errors := make(chan error, 2)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+
+		buf := make([]byte, 1024)
+		for {
+			n, err := stdout.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("read error: %s", err)
+					errors <- err
+				}
+
+				break
+			}
+
+			// log.Printf("sending data")
+			var ctl msg.ControlMessage
+			ctl.Code = msg.DATA
+			ctl.Sub = 1
+			ctl.Data = buf[:n]
+
+			err = sess.send(ctx, &ctl)
+			if err != nil {
+				errors <- err
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		buf := make([]byte, 1024)
+		for {
+			n, err := stderr.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("read error: %s", err)
+					errors <- err
+				}
+
+				break
+			}
+
+			// log.Printf("sending data")
+			var ctl msg.ControlMessage
+			ctl.Code = msg.DATA
+			ctl.Sub = 2
+			ctl.Data = buf[:n]
+
+			err = sess.send(ctx, &ctl)
+			if err != nil {
+				errors <- err
+				return
+			}
+		}
+	}()
+
+	readctx, readcancel := context.WithCancel(context.Background())
+	defer readcancel()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			var ctl msg.ControlMessage
+
+			err := sess.recv(readctx, &ctl)
+			if err != nil {
+				return
+			}
+
+			switch ctl.Code {
+			case msg.CLOSE:
+				stdin.Close()
+			case msg.DATA:
+				for len(ctl.Data) > 0 {
+					// log.Printf("writing read data")
+					n, err := stdin.Write(ctl.Data)
+					if err != nil {
+						errors <- err
+						return
+					}
+
+					ctl.Data = ctl.Data[n:]
+				}
+			}
+		}
+	}()
+
+	c.Wait()
+	stdout.Close()
+	stderr.Close()
+	stdin.Close()
+	readcancel()
+
+	wg.Wait()
+
+	close(errors)
+
+	var out error
+
+	for err := range errors {
+		out = multierror.Append(out, err)
+	}
+
+	return out
+
+}
+
+func (s *Server) runPTY(ctx context.Context, sess *ServerSession, req *msg.RequestCommand) error {
+	user := sess.user
+
+	if s.config.LocalUser.Force != "" {
+		user = s.config.LocalUser.Force
+	}
+
+	c, err := s.constructCommand(ctx, sess, user, req)
+	if err != nil {
+		return err
+	}
+
+	dir, socket, err := s.setupAgentForward(ctx, sess)
+	if err != nil {
+		sess.log.Error("unable to setup agent forward", "error", err)
+	} else {
+		defer os.RemoveAll(dir)
+		c.Env = append(c.Env, "SSH_AUTH_SOCK="+socket)
 	}
 
 	f, err := ptyStart(c)

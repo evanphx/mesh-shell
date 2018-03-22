@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -11,11 +10,16 @@ import (
 	"strings"
 
 	"github.com/evanphx/mesh-shell/client"
+	"github.com/jessevdk/go-flags"
 )
 
-var (
-	fVerbose = flag.Bool("v", false, "set verbose output")
-)
+type opts struct {
+	Verbose      bool     `short:"v" description:"set verbose output"`
+	ForceTTY     bool     `short:"t" description:"force pseudo-terminal allocation"`
+	ForwardAgent bool     `short:"A" description:"forward ssh-agent"`
+	DisableAgent bool     `short:"a" description:"disables forwarding of ssh-agent"`
+	Env          []string `short:"e" description:"environment variables to set remotely"`
+}
 
 type destination struct {
 	user    string
@@ -51,21 +55,29 @@ func parseArg(arg string) (destination, error) {
 }
 
 func main() {
-	flag.Parse()
+	var o opts
 
-	if len(flag.Args()) < 1 {
+	parser := flags.NewNamedParser("msh", flags.Default|flags.PassAfterNonOption)
+	parser.AddGroup("Options", "", &o)
+
+	args, err := parser.Parse()
+	if err != nil {
+		os.Exit(1)
+	}
+
+	if len(args) < 1 {
 		fmt.Printf("Usage: msh [<user>@]<id>[%%<network>]\n")
 		os.Exit(1)
 	}
 
-	dest, err := parseArg(flag.Arg(0))
+	dest, err := parseArg(args[0])
 	if err != nil {
 		fmt.Printf("Unable to parse destination: %s\n", err)
 		os.Exit(1)
 	}
 
 	c, err := client.NewClient(client.ClientOptions{
-		Verbose: *fVerbose,
+		Verbose: o.Verbose,
 	})
 
 	if err != nil {
@@ -86,7 +98,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = c.StartShell(ctx)
+	if !o.ForwardAgent && !o.DisableAgent {
+		o.ForwardAgent = true
+	}
+
+	opts := client.StartOptions{
+		ForwardAgent: o.ForwardAgent,
+		PTY:          o.ForceTTY,
+		Env:          o.Env,
+	}
+
+	if len(args) > 1 {
+		opts.Command = args[1]
+		opts.Args = args[2:]
+	}
+
+	err = c.Start(ctx, opts)
+
 	if err != nil {
 		fmt.Printf("Error starting shell: %s\n", err)
 		os.Exit(1)

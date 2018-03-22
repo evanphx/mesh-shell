@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -241,7 +243,102 @@ type streamOutput struct {
 	data []byte
 }
 
+func (c *Client) listenAgentForward(ctx context.Context, sock string) {
+	for {
+		pipe, err := c.pipe.AcceptSub(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error accepting sub pipe: %s\n", err)
+			return
+		}
+
+		go forwardUnixSocket(pipe, sock)
+	}
+}
+
+func forwardUnixSocket(p *pipe.Pipe, addr string) {
+	ctx := context.Background()
+	defer p.Close(ctx)
+
+	conn, err := net.Dial("unix", addr)
+	if err != nil {
+		return
+	}
+
+	defer conn.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		io.Copy(conn, pipe.Reader(ctx, p))
+		conn.(*net.UnixConn).CloseWrite()
+	}()
+
+	go func() {
+		defer wg.Done()
+		io.Copy(pipe.Writer(ctx, p), conn)
+	}()
+
+	wg.Wait()
+}
+
+type StartOptions struct {
+	PTY          bool
+	ForwardAgent bool
+	Command      string
+	Args         []string
+	Env          []string
+}
+
+func (c *Client) Start(ctx context.Context, opts StartOptions) error {
+	if opts.ForwardAgent {
+		if addr := os.Getenv("SSH_AUTH_SOCK"); addr != "" {
+			go c.listenAgentForward(ctx, addr)
+		}
+	}
+
+	req := msg.RequestCommand{
+		Id:           c.nextStream(),
+		Pty:          opts.PTY,
+		Command:      opts.Command,
+		Args:         opts.Args,
+		ForwardAgent: opts.ForwardAgent,
+		Env: append(opts.Env,
+			"TERM="+os.Getenv("TERM"),
+		),
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	err := c.send(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	if opts.PTY {
+		oldState, err := terminal.MakeRaw(0)
+		if err != nil {
+			return err
+		}
+
+		defer terminal.Restore(0, oldState)
+		width, height, err := terminal.GetSize(0)
+		if err == nil {
+			req.Rows = int32(height)
+			req.Cols = int32(width)
+		}
+	}
+
+	return c.handleIO(ctx)
+}
+
 func (c *Client) StartShell(ctx context.Context) error {
+	if addr := os.Getenv("SSH_AUTH_SOCK"); addr != "" {
+		go c.listenAgentForward(ctx, addr)
+	}
+
 	oldState, err := terminal.MakeRaw(0)
 	if err != nil {
 		return err
@@ -252,15 +349,11 @@ func (c *Client) StartShell(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var req msg.RequestShell
+	var req msg.RequestCommand
 
 	req.Env = []string{
 		"TERM=" + os.Getenv("TERM"),
 	}
-
-	winch := make(chan os.Signal, 1)
-
-	signal.Notify(winch, syscall.SIGWINCH)
 
 	width, height, err := terminal.GetSize(0)
 	if err == nil {
@@ -274,6 +367,41 @@ func (c *Client) StartShell(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	return c.handleIO(ctx)
+}
+
+func (c *Client) RunCommand(ctx context.Context, cmd string, args ...string) error {
+	if addr := os.Getenv("SSH_AUTH_SOCK"); addr != "" {
+		go c.listenAgentForward(ctx, addr)
+	}
+
+	var req msg.RequestCommand
+
+	req.Command = cmd
+	req.Args = args
+
+	req.Env = []string{
+		"TERM=" + os.Getenv("TERM"),
+	}
+
+	req.Id = c.nextStream()
+
+	err := c.send(ctx, &req)
+	if err != nil {
+		return err
+	}
+
+	return c.handleIO(ctx)
+}
+
+func (c *Client) handleIO(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	winch := make(chan os.Signal, 1)
+
+	signal.Notify(winch, syscall.SIGWINCH)
 
 	buf := make([]byte, 1024)
 	input := make(chan []byte, 10)
@@ -294,7 +422,7 @@ func (c *Client) StartShell(ctx context.Context) error {
 		for {
 			var ctl msg.ControlMessage
 
-			err = c.recv(ctx, &ctl)
+			err := c.recv(ctx, &ctl)
 			if err != nil {
 				return
 			}
@@ -353,7 +481,7 @@ func (c *Client) StartShell(ctx context.Context) error {
 						ctl.Sub = 0
 						ctl.Data = usable[:idx+1]
 
-						err = c.send(ctx, &ctl)
+						err := c.send(ctx, &ctl)
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "error sending: %s", err)
 							return nil
@@ -392,7 +520,7 @@ func (c *Client) StartShell(ctx context.Context) error {
 			ctl.Sub = 0
 			ctl.Data = usable
 
-			err = c.send(ctx, &ctl)
+			err := c.send(ctx, &ctl)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error sending: %s", err)
 				return nil
