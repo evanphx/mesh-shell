@@ -369,7 +369,7 @@ authLoop:
 		return err
 	}
 
-	if req.Tty {
+	if req.Pty {
 		err = s.runPTY(ctx, sess, &req)
 	} else {
 		err = s.runCommand(ctx, sess, &req)

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/crypto/ssh/terminal"
+
 	"github.com/evanphx/mesh-shell/client"
 	"github.com/jessevdk/go-flags"
 )
@@ -16,6 +18,7 @@ import (
 type opts struct {
 	Verbose      bool     `short:"v" description:"set verbose output"`
 	ForceTTY     bool     `short:"t" description:"force pseudo-terminal allocation"`
+	DisableTTY   bool     `short:"T" description:"disables pseudo-terminal allocation"`
 	ForwardAgent bool     `short:"A" description:"forward ssh-agent"`
 	DisableAgent bool     `short:"a" description:"disables forwarding of ssh-agent"`
 	Env          []string `short:"e" description:"environment variables to set remotely"`
@@ -102,9 +105,25 @@ func main() {
 		o.ForwardAgent = true
 	}
 
+	useTTY := terminal.IsTerminal(1)
+
+	if o.DisableTTY {
+		useTTY = false
+	} else if o.ForceTTY {
+		useTTY = true
+	}
+
+	if o.Verbose {
+		if useTTY {
+			fmt.Printf("- allocating tty\n")
+		} else {
+			fmt.Printf("- no tty used\n")
+		}
+	}
+
 	opts := client.StartOptions{
 		ForwardAgent: o.ForwardAgent,
-		PTY:          o.ForceTTY,
+		PTY:          useTTY,
 		Env:          o.Env,
 	}
 
